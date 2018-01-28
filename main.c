@@ -3,10 +3,13 @@
 #include <signal.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <errno.h>
 #include "ringbuf.h"
 
-// マイコン側の処理
-
+// -----
+// Micon program
+// -----
 void register_irq_handler(void (*func)(void));
 
 void uart_rx_handler()
@@ -15,8 +18,6 @@ void uart_rx_handler()
   static uint8_t buf[] = "test";
 
   ringbuf_push(buf[pos]);
-
-//  printf("call uart_rx_handler\n");
 
   pos++;
 }
@@ -30,14 +31,13 @@ void micon_main()
     if(ringbuf_length() > 0)
     {
       printf("%d\n", ringbuf_pop());
-    }else
-    {
- //     printf("empty\n");
     }
   }
 }
 
-// 管理側の処理
+// -----
+// Control program
+// -----
 pthread_t thread_handle;
 void      (*irq_handler)(void);
 int       int_status = 0;
@@ -56,12 +56,18 @@ void do_irq_handler()
 
 void suspend_micon_thread()
 {
-  pthread_kill(thread_handle, SIGUSR1);
+  if(pthread_kill(thread_handle, SIGUSR1) != 0)
+  {
+    printf("[WARN] pthread_kill fail.\n");
+  }
 }
 
 void resume_micon_thread()
 {
-  pthread_kill(thread_handle, SIGUSR2);
+  if(pthread_kill(thread_handle, SIGUSR2) != 0)
+  {
+    printf("[WARN] pthread_kill fail.\n");
+  }
 }
 
 void micon_thread_signal_usr1_handler()
@@ -76,6 +82,10 @@ void micon_thread_signal_usr1_handler()
   int_status = 1;
 
   sigsuspend(&signal_set);
+  if(errno != EINTR)
+  {
+    printf("[WARN] wrong return of sigsuspend(ret = %d).\n", errno);
+  }
 
   int_status = 0;
 
@@ -94,19 +104,31 @@ void micon_thread()
   sigusr1.sa_flags   = 0;
   sigusr1.sa_handler = micon_thread_signal_usr1_handler;
   sigemptyset(&sigusr1.sa_mask);
-  sigaction(SIGUSR1, &sigusr1, NULL);
+  if(sigaction(SIGUSR1, &sigusr1, NULL) != 0)
+  {
+    printf("[ERROR] failed to register SIGUSR1.\n");
+    exit(1);
+  }
 
   sigusr2.sa_flags   = 0;
   sigusr2.sa_handler = micon_thread_signal_usr2_handler;
   sigemptyset(&sigusr2.sa_mask);
-  sigaction(SIGUSR2, &sigusr2, NULL);
+  if(sigaction(SIGUSR2, &sigusr2, NULL) != 0)
+  {
+    printf("[ERROR] failed to register SIGUSR2.\n");
+    exit(1);
+  }
 
   micon_main();
 }
 
 int main()
 {
-  pthread_create(&thread_handle, NULL, micon_thread, NULL);
+  if(pthread_create(&thread_handle, NULL, micon_thread, NULL) != 0)
+  {
+    printf("[ERROR] failed to create thread.\n");
+    exit(1);
+  }
 
   for(int i = 0 ; i < 5 ; i++)
   {

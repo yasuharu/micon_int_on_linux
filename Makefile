@@ -1,2 +1,2 @@
 default:
-	gcc -g -o test main.c ringbuf.c -DLINUX_TEST -lpthread
+	gcc -g -o test main.c ringbuf.c -Wall -DLINUX_TEST -lpthread
