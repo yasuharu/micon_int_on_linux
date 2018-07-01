@@ -40,7 +40,15 @@ void micon_main()
 // -----
 pthread_t thread_handle;
 void      (*irq_handler)(void);
-int       int_status = 0;
+
+enum INT_STATUS
+{
+  INT_STATUS_READY,
+  INT_STATUS_SIGUSR1_SETUP,
+  INT_STATUS_RUN,
+  INT_STATUS_FIN,
+};
+volatile int int_status = 0;
 
 void register_irq_handler(void (*func)(void))
 {
@@ -49,13 +57,19 @@ void register_irq_handler(void (*func)(void))
 
 void do_irq_handler()
 {
-  while(int_status != 1);
+  while(int_status != INT_STATUS_RUN);
 
   irq_handler();
+
+  int_status = INT_STATUS_FIN;
 }
 
 void suspend_micon_thread()
 {
+  while(int_status != INT_STATUS_READY);
+
+  int_status = INT_STATUS_SIGUSR1_SETUP;
+
   if(pthread_kill(thread_handle, SIGUSR1) != 0)
   {
     printf("[WARN] pthread_kill fail.\n");
@@ -64,6 +78,8 @@ void suspend_micon_thread()
 
 void resume_micon_thread()
 {
+  while(int_status != INT_STATUS_FIN);
+
   if(pthread_kill(thread_handle, SIGUSR2) != 0)
   {
     printf("[WARN] pthread_kill fail.\n");
@@ -74,20 +90,28 @@ void micon_thread_signal_usr1_handler()
 {
   sigset_t signal_set;
 
-  while(int_status != 0);
+  while(int_status != INT_STATUS_SIGUSR1_SETUP);
 
-  sigemptyset(&signal_set);
+  printf("usr1 called\n");
   printf("begin sigsuspend\n");
 
-  int_status = 1;
+  // mask SIGUSR2 due to SIGUSR2 may catch before sigsuspend
+  sigemptyset(&signal_set);
+  sigaddset(&signal_set, SIGUSR2);
+  sigprocmask(SIG_SETMASK, &signal_set, NULL);
 
+  int_status = INT_STATUS_RUN;
+
+  // sigsuspend replace empty signal set
+  // if SIGUSR2 calls before sigsuspend, immediately resume process
+  sigemptyset(&signal_set);
   sigsuspend(&signal_set);
   if(errno != EINTR)
   {
     printf("[WARN] wrong return of sigsuspend(ret = %d).\n", errno);
   }
 
-  int_status = 0;
+  int_status = INT_STATUS_READY;
 
   printf("end sigsuspend\n");
 }
@@ -101,6 +125,7 @@ void micon_thread()
 {
   struct sigaction sigusr1, sigusr2;
 
+  // register signal hadlers
   sigusr1.sa_flags   = 0;
   sigusr1.sa_handler = micon_thread_signal_usr1_handler;
   sigemptyset(&sigusr1.sa_mask);
@@ -130,10 +155,10 @@ int main()
     exit(1);
   }
 
+  sleep(1);
   for(int i = 0 ; i < 5 ; i++)
   {
     sleep(1);
-
     suspend_micon_thread();
     do_irq_handler();
     resume_micon_thread();
